@@ -146,15 +146,24 @@ static void delay_pos_start_vref(Data data, FuriHalAdcHandle* adc_handle) {
     }
 }
 
-static float find_avg_from_array(float arr[]) {
-    size_t arr_size = sizeof(&arr) / sizeof(arr[0]);
-    float sum = 0;
-    float avg = 0;
-    for(size_t i = 0; i < arr_size; ++i) {
-        sum += arr[i];
+static int find_index_max_value_from_array(float arr[]) {
+    int max_value = 0;
+    int index = 0;
+    for(size_t i = 0; i < DATA_STORE_BUFFER_SIZE; ++i) {
+        if(arr[i] > max_value) {
+            max_value = arr[i];
+            index = i;
+        }
     }
-    avg = sum / arr_size;
-    return avg;
+    return index;
+}
+
+static bool find_phase_check(int index) {
+    // Check first half of wave
+    if(index >= DATA_STORE_BUFFER_SIZE / 2) {
+        return false;
+    }
+    return true;
 }
 
 static void sample_sin_input(Data data, FuriHalAdcHandle* adc_handle) {
@@ -243,60 +252,53 @@ int32_t resolver_main(void* p) {
             }
         } else {
             // 0 - VERF; 1 - COS; 2 - SIN
-            float vsin_avg = 0;
-            float vcos_avg = 0;
+            int vsin_avg = 0;
+            int vcos_avg = 0;
+            int vsin_max_i = 0;
+            int vcos_max_i = 0;
             bool vsin_phase = false;
             bool vcos_phase = false;
 
             // Sample SIN
             delay_pos_start_vref(data, adc_handle);
             sample_sin_input(data, adc_handle); // 50 uS ... if Size 23
-            vsin_avg = find_avg_from_array(data.items[2].value);
+            vsin_max_i = find_index_max_value_from_array(data.items[2].value);
+            vsin_phase = find_phase_check(vsin_max_i);
+            vsin_avg = data.items[2].value[vsin_max_i];
             if(vsin_avg <= eps) {
-                sample_sin_input(data, adc_handle); // 50 uS ... if Size 23
-                vsin_avg = find_avg_from_array(data.items[2].value);
-                if(vsin_avg <= eps) {
-                    FURI_LOG_I("RESO SIN", "SIN dead = %4.3f", (double)vsin_avg);
-                    vsin_avg = 0.001;
-                } else {
-                    vsin_avg = -vsin_avg;
-                    FURI_LOG_I("RESO SIN", "SIN sign change = %4.3f", (double)vsin_avg);
-                    vsin_phase = false;
-                }
+                FURI_LOG_I("RESO SIN", "SIN dead = %d", vsin_avg);
+                vsin_avg = 0.001;
             } else {
-                vsin_phase = true;
+                if(!vsin_phase) {
+                    vsin_avg = -vsin_avg;
+                }
             }
-            FURI_LOG_I(
-                "RESO SIN", "SIN in RESULT = %4.3f, phase = %d", (double)vsin_avg, vsin_phase);
+            FURI_LOG_I("RESO SIN", "SIN in RESULT = %d, phase = %d", vsin_avg, vsin_phase);
 
             // Sample COS
             delay_pos_start_vref(data, adc_handle);
             sample_cos_input(data, adc_handle); // 50 uS ... if Size 23
-            vcos_avg = find_avg_from_array(data.items[1].value);
+            vcos_max_i = find_index_max_value_from_array(data.items[1].value);
+            vcos_phase = find_phase_check(vcos_max_i);
+            vcos_avg = data.items[1].value[vcos_max_i];
             if(vcos_avg <= eps) {
-                sample_cos_input(data, adc_handle); // 50 uS ... if Size 23
-                vcos_avg = find_avg_from_array(data.items[1].value);
-                if(vcos_avg <= eps) {
-                    FURI_LOG_I("RESO COS", "COS dead = %4.3f", (double)vcos_avg);
-                    vcos_avg = 0.001;
-                } else {
-                    FURI_LOG_I("RESO COS", "COS sign change = %4.3f", (double)vcos_avg);
-                    vcos_avg = -vcos_avg;
-                    vcos_phase = false;
-                }
+                FURI_LOG_I("RESO COS", "COS dead = %d", vcos_avg);
+                vcos_avg = 0.001;
             } else {
-                vcos_phase = true;
+                if(!vcos_phase) {
+                    vcos_avg = -vcos_avg;
+                }
             }
-            FURI_LOG_I(
-                "RESO COS", "COS in RESULT = %4.3f, phase = %d", (double)vcos_avg, vcos_phase);
+
+            FURI_LOG_I("RESO COS", "COS in RESULT = %d, phase = %d", vcos_avg, vcos_phase);
 
             // FIND QUADRANT
             if(vsin_phase == true && vcos_phase == true) {
                 quadrant = 1;
             } else if(vsin_phase == false && vcos_phase == false) {
-                quadrant = 3;
-            } else if(vsin_phase == false && vcos_phase == true) {
                 quadrant = 4;
+            } else if(vsin_phase == false && vcos_phase == true) {
+                quadrant = 3;
             } else if(vsin_phase == true && vcos_phase == false) {
                 quadrant = 2;
             }
