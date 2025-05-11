@@ -5,7 +5,7 @@ App(
     entry_point="resolver_main",
     requires=["gui"],
     stack_size=1 * 1024,
-    fap_icon="resolver_10px.png",
+    fap_icon="./imgs/resolver_10px.png",
     fap_category="GPIO",
     fap_version="0.1",
     fap_description="Resolver reader app - apply sin winding wire to pin 7/C3,  cos wire to pin 15/C1, reference voltage wire to pin 16/C0 with a voltage ranging from 0V to 2.5V and frequency 10 kHz, ground to pin 18/GND"

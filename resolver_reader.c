@@ -1,9 +1,8 @@
 /* 
  * TODO:  <08-05-25, lalapopa> 
- * 1. Check timing for wave taking
- * 1. ADC settings for taking more voltage
- * 1. Check avg value taking and calculating
- * 1. Check sample amount needed for 10.5kHz or 8kHz
+ * 1. Wrong avg interpretation
+ * 1. Make for 8.5 kHz
+ * 1. Clip voltage in 0-2.5v
  * */
 #include <furi.h>
 #include <furi_hal.h>
@@ -15,7 +14,7 @@
 #include <gui/canvas.h>
 #include <gui/canvas_i.h>
 
-#define DATA_STORE_BUFFER_SIZE ((uint16_t)22)
+#define DATA_STORE_BUFFER_SIZE ((uint16_t)23)
 
 typedef float (*ValueConverter)(FuriHalAdcHandle* handle, uint16_t value);
 
@@ -77,7 +76,7 @@ static void app_input_callback(InputEvent* input_event, void* ctx) {
 
 static void delay_pos_start_vref(Data data, FuriHalAdcHandle* adc_handle) {
     // only work for 10kHz
-    int eps = 1150;
+    int eps = 1050;
     int VREF = 0;
     int confirm_amount = 2;
     bool wait_neg = true;
@@ -87,7 +86,6 @@ static void delay_pos_start_vref(Data data, FuriHalAdcHandle* adc_handle) {
     int confirms = 0;
     uint16_t try_counter = 0;
 
-    furi_hal_gpio_write(&gpio_ext_pa7, true); // Debug
     // ON ADC SAMPLE TAKES ABOUT 2 uS
     while(on_neg_confirms <= confirm_amount && on_pos_confirms <= confirm_amount) {
         VREF = data.items[0].converter(
@@ -146,7 +144,6 @@ static void delay_pos_start_vref(Data data, FuriHalAdcHandle* adc_handle) {
             }
         }
     }
-    furi_hal_gpio_write(&gpio_ext_pa7, false); // Debug
 }
 
 static float find_avg_from_array(float arr[]) {
@@ -161,23 +158,26 @@ static float find_avg_from_array(float arr[]) {
 }
 
 static void sample_sin_input(Data data, FuriHalAdcHandle* adc_handle) {
+    furi_hal_gpio_write(&gpio_ext_pa7, true); // Debug
     for(size_t x = 0; x < DATA_STORE_BUFFER_SIZE; x++) {
         data.items[2].value[x] = data.items[2].converter(
             adc_handle, furi_hal_adc_read(adc_handle, data.items[2].pin->channel));
     } // 50 uS ... if Size 23
+    furi_hal_gpio_write(&gpio_ext_pa7, false); // Debug
 }
 
 static void sample_cos_input(Data data, FuriHalAdcHandle* adc_handle) {
+    furi_hal_gpio_write(&gpio_ext_pa7, true); // Debug
     for(size_t x = 0; x < DATA_STORE_BUFFER_SIZE; x++) {
         data.items[1].value[x] = data.items[1].converter(
             adc_handle, furi_hal_adc_read(adc_handle, data.items[1].pin->channel));
     } // 50 uS ... if Size 23
+    furi_hal_gpio_write(&gpio_ext_pa7, false); // Debug
 }
 
-// static float mapFloat(float x, float in_min, float in_max, float out_min, float out_max)
-// {
-//     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-// }
+static float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
 
 int32_t resolver_main(void* p) {
     UNUSED(p);
@@ -223,10 +223,10 @@ int32_t resolver_main(void* p) {
     FuriHalAdcHandle* adc_handle = furi_hal_adc_acquire();
     furi_hal_adc_configure_ex(
         adc_handle,
-        FuriHalAdcScale2500,
+        FuriHalAdcScale2048,
         FuriHalAdcClockSync64,
         FuriHalAdcOversampleNone,
-        FuriHalAdcSamplingtime247_5);
+        FuriHalAdcSamplingtime2_5);
 
     // Init for GPIO out
     furi_hal_gpio_write(&gpio_ext_pa7, false);
@@ -256,14 +256,18 @@ int32_t resolver_main(void* p) {
                 sample_sin_input(data, adc_handle); // 50 uS ... if Size 23
                 vsin_avg = find_avg_from_array(data.items[2].value);
                 if(vsin_avg <= eps) {
+                    FURI_LOG_I("RESO SIN", "SIN dead = %4.3f", (double)vsin_avg);
                     vsin_avg = 0.001;
                 } else {
                     vsin_avg = -vsin_avg;
+                    FURI_LOG_I("RESO SIN", "SIN sign change = %4.3f", (double)vsin_avg);
                     vsin_phase = false;
                 }
             } else {
                 vsin_phase = true;
             }
+            FURI_LOG_I(
+                "RESO SIN", "SIN in RESULT = %4.3f, phase = %d", (double)vsin_avg, vsin_phase);
 
             // Sample COS
             delay_pos_start_vref(data, adc_handle);
@@ -273,24 +277,31 @@ int32_t resolver_main(void* p) {
                 sample_cos_input(data, adc_handle); // 50 uS ... if Size 23
                 vcos_avg = find_avg_from_array(data.items[1].value);
                 if(vcos_avg <= eps) {
+                    FURI_LOG_I("RESO COS", "COS dead = %4.3f", (double)vcos_avg);
                     vcos_avg = 0.001;
                 } else {
+                    FURI_LOG_I("RESO COS", "COS sign change = %4.3f", (double)vcos_avg);
                     vcos_avg = -vcos_avg;
                     vcos_phase = false;
                 }
             } else {
                 vcos_phase = true;
             }
+            FURI_LOG_I(
+                "RESO COS", "COS in RESULT = %4.3f, phase = %d", (double)vcos_avg, vcos_phase);
+
             // FIND QUADRANT
             if(vsin_phase == true && vcos_phase == true) {
                 quadrant = 1;
+            } else if(vsin_phase == false && vcos_phase == false) {
+                quadrant = 3;
+            } else if(vsin_phase == false && vcos_phase == true) {
+                quadrant = 4;
             } else if(vsin_phase == true && vcos_phase == false) {
                 quadrant = 2;
-            } else if(vsin_phase == false && vcos_phase == false) {
-                quadrant = 4;
-            } else if(vsin_phase == false && vcos_phase == true) {
-                quadrant = 3;
             }
+            FURI_LOG_I("RESO QUAD", "quadrant = %d", quadrant);
+
             // FIND ANGLE
             if(vcos_avg <= 0.01 && vcos_avg >= 0) {
                 angle_rad = fabs(atan(vsin_avg / 0.001));
